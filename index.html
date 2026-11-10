@@ -23,8 +23,16 @@ button:disabled{opacity:.5}.r{display:flex;justify-content:space-between;gap:8px
 // Secrets required: GEMINI_KEY, FOOTBALL_KEY
 const MODEL = "gemini-3.8-flash";
 
+async function tfetch(url, opts, ms) {
+  const c = new AbortController();
+  const t = setTimeout(() => c.abort(), ms || 45000);
+  try { return await fetch(url, { ...opts, signal: c.signal }); }
+  catch (e) { throw new Error(e.name === "AbortError" ? "انتهت المهلة: " + url.split("/")[2] : e.message); }
+  finally { clearTimeout(t); }
+}
+
 async function gemini(env, parts) {
-  const r = await fetch(
+  const r = await tfetch(
     "https://generativelanguage.googleapis.com/v1beta/models/" + MODEL + ":generateContent",
     {
       method: "POST",
@@ -42,7 +50,7 @@ async function gemini(env, parts) {
 }
 
 async function fb(env, path, retry = true) {
-  const r = await fetch("https://v3.football.api-sports.io" + path, {
+  const r = await tfetch("https://v3.football.api-sports.io" + path, {
     headers: { "x-apisports-key": env.FOOTBALL_KEY },
   });
   const j = await r.json();
@@ -158,6 +166,7 @@ const ANALYZE = `أنت محلل مباريات. عندك معطيات من صو
 
 async function analyze(env, b64) {
   if (!env.GEMINI_KEY) throw new Error("أدخل مفتاح Gemini من قسم المفاتيح");
+  if (typeof progress === "function") progress("1/3 قراءة الصورة...");
   const x = await gemini(env, [
     { text: EXTRACT },
     { inline_data: { mime_type: "image/jpeg", data: b64 } },
@@ -166,7 +175,11 @@ async function analyze(env, b64) {
   if (x.match_count > 1) return { refuse: "الصورة فيها أكثر من مباراة، ارفع صورة لمباراة واحدة." };
   if (x.status === "postponed") return { refuse: "المباراة مؤجلة أو ملغاة." };
 
-  const api = await apiData(env, x.home_en, x.away_en);
+  if (typeof progress === "function") progress("2/3 جلب البيانات...");
+  let api;
+  try { api = await apiData(env, x.home_en, x.away_en); }
+  catch (e) { api = { used: false, notes: [String(e.message || e)] }; }
+  if (typeof progress === "function") progress("3/3 كتابة التحليل...");
   const r = await gemini(env, [
     { text: ANALYZE + "\n\nمعطيات الصورة:\n" + JSON.stringify(x) + "\n\nمعطيات API:\n" + JSON.stringify(api) },
   ]);
@@ -178,6 +191,7 @@ async function analyze(env, b64) {
   };
 }
 
+function progress(t){var b=document.getElementById("go");if(b)b.textContent=t}
 function getEnv(){try{return{GEMINI_KEY:localStorage.getItem("gk")||window._gk||"",FOOTBALL_KEY:localStorage.getItem("fk")||window._fk||""}}catch(e){return{GEMINI_KEY:window._gk||"",FOOTBALL_KEY:window._fk||""}}}
 var $=function(i){return document.getElementById(i)},img=null;
 function esc(s){var d=document.createElement("div");d.textContent=s==null?"":String(s);return d.innerHTML}
