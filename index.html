@@ -21,7 +21,7 @@ button:disabled{opacity:.5}.r{display:flex;justify-content:space-between;gap:8px
 <script>
 // Match Analyzer - Cloudflare Worker
 // Secrets required: GEMINI_KEY, FOOTBALL_KEY
-const MODEL = "gemini-3.8-flash";
+const MODELS = ["gemini-3.8-flash", "gemini-flash-latest", "gemini-2.5-flash-lite"];
 
 async function tfetch(url, opts, ms) {
   const c = new AbortController();
@@ -31,11 +31,11 @@ async function tfetch(url, opts, ms) {
   finally { clearTimeout(t); }
 }
 
-async function gemini(env, parts, retry) {
+async function geminiOne(env, parts, retry, model) {
   const gc = { responseMimeType: "application/json", temperature: 0.2 };
   if (!retry) gc.thinkingConfig = { thinkingLevel: "low" };
   const r = await tfetch(
-    "https://generativelanguage.googleapis.com/v1beta/models/" + MODEL + ":generateContent",
+    "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent",
     {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-goog-api-key": env.GEMINI_KEY },
@@ -46,10 +46,25 @@ async function gemini(env, parts, retry) {
     }
   );
   const j = await r.json();
-  if (!r.ok && !retry && r.status === 400) return gemini(env, parts, true);
+  if (!r.ok && !retry && r.status === 400) return geminiOne(env, parts, true, model);
   if (!r.ok) throw new Error("Gemini: " + ((j.error && j.error.message) || r.status));
   const t = ((j.candidates || [])[0]?.content?.parts || []).map((p) => p.text || "").join("");
   return JSON.parse(t.replace(/```json|```/g, "").trim());
+}
+
+async function gemini(env, parts) {
+  let last;
+  for (let round = 0; round < 2; round++) {
+    for (const m of MODELS) {
+      try { return await geminiOne(env, parts, false, m); }
+      catch (e) {
+        last = e;
+        if (!/demand|overload|unavailable|quota|not found|no longer|429|503|404/i.test(e.message)) throw e;
+      }
+    }
+    await new Promise((ok) => setTimeout(ok, 5000));
+  }
+  throw last;
 }
 
 async function fb(env, path, retry = true) {
