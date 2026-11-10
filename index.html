@@ -25,13 +25,15 @@ const MODEL = "gemini-3.8-flash";
 
 async function tfetch(url, opts, ms) {
   const c = new AbortController();
-  const t = setTimeout(() => c.abort(), ms || 45000);
+  const t = setTimeout(() => c.abort(), ms || 90000);
   try { return await fetch(url, { ...opts, signal: c.signal }); }
   catch (e) { throw new Error(e.name === "AbortError" ? "انتهت المهلة: " + url.split("/")[2] : e.message); }
   finally { clearTimeout(t); }
 }
 
-async function gemini(env, parts) {
+async function gemini(env, parts, retry) {
+  const gc = { responseMimeType: "application/json", temperature: 0.2 };
+  if (!retry) gc.thinkingConfig = { thinkingLevel: "low" };
   const r = await tfetch(
     "https://generativelanguage.googleapis.com/v1beta/models/" + MODEL + ":generateContent",
     {
@@ -39,11 +41,12 @@ async function gemini(env, parts) {
       headers: { "Content-Type": "application/json", "x-goog-api-key": env.GEMINI_KEY },
       body: JSON.stringify({
         contents: [{ parts }],
-        generationConfig: { responseMimeType: "application/json", temperature: 0.2 },
+        generationConfig: gc,
       }),
     }
   );
   const j = await r.json();
+  if (!r.ok && !retry && r.status === 400) return gemini(env, parts, true);
   if (!r.ok) throw new Error("Gemini: " + ((j.error && j.error.message) || r.status));
   const t = ((j.candidates || [])[0]?.content?.parts || []).map((p) => p.text || "").join("");
   return JSON.parse(t.replace(/```json|```/g, "").trim());
@@ -196,7 +199,7 @@ function getEnv(){try{return{GEMINI_KEY:localStorage.getItem("gk")||window._gk||
 var $=function(i){return document.getElementById(i)},img=null;
 function esc(s){var d=document.createElement("div");d.textContent=s==null?"":String(s);return d.innerHTML}
 function card(h){var d=document.createElement("div");d.className="c";d.innerHTML=h;$("out").appendChild(d)}
-function shrink(file){return new Promise(function(res){var i=new Image();i.onload=function(){var s=Math.min(1,1000/i.width),c=document.createElement("canvas");c.width=i.width*s;c.height=i.height*s;c.getContext("2d").drawImage(i,0,0,c.width,c.height);var u=c.toDataURL("image/jpeg",.85);res({url:u,b64:u.split(",")[1]})};i.src=URL.createObjectURL(file)})}
+function shrink(file){return new Promise(function(res){var i=new Image();i.onload=function(){var s=Math.min(1,900/i.width),c=document.createElement("canvas");c.width=i.width*s;c.height=i.height*s;c.getContext("2d").drawImage(i,0,0,c.width,c.height);var u=c.toDataURL("image/jpeg",.8);res({url:u,b64:u.split(",")[1]})};i.src=URL.createObjectURL(file)})}
 $("f").onchange=async function(e){var f=e.target.files[0];if(!f)return;img=await shrink(f);$("h").innerHTML='<img src="'+img.url+'">';$("go").disabled=false;$("out").innerHTML="";e.target.value=""};
 $("sv").onclick=function(){var g=$("gk").value.trim(),f=$("fk").value.trim();try{if(g)localStorage.setItem("gk",g);if(f)localStorage.setItem("fk",f)}catch(e){if(g)window._gk=g;if(f)window._fk=f}$("gk").value="";$("fk").value="";$("ks").textContent="تم الحفظ ✓"};
 $("go").onclick=async function(){
