@@ -36,18 +36,45 @@ async function llm(env, parts) {
       ? { type: "text", text: p.text }
       : { type: "image_url", image_url: { url: "data:" + p.inline_data.mime_type + ";base64," + p.inline_data.data } }
   );
-  const r = await tfetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.OR_KEY },
-    body: JSON.stringify({ model: "openrouter/free", messages: [{ role: "user", content }], temperature: 0.2, max_tokens: 2000 }),
-  }, 90000);
-  const j = await r.json();
-  if (!r.ok) throw new Error("OpenRouter: " + ((j.error && j.error.message) || r.status));
-  const t = (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "";
-  const a = t.indexOf("{"), b = t.lastIndexOf("}");
-  if (a < 0 || b < 0) throw new Error("الموديل ما رجّع نتيجة مفهومة، حاول مرة ثانية");
-  try { return JSON.parse(t.slice(a, b + 1)); }
-  catch (e) { throw new Error("الموديل رجّع نتيجة غير صالحة، حاول مرة ثانية"); }
+  let last = "";
+  for (let i = 0; i < 4; i++) {
+    const body = {
+      model: "openrouter/free",
+      messages: [
+        { role: "system", content: "Reply with one valid JSON object only. No markdown, no explanations, no text outside the JSON." },
+        { role: "user", content },
+      ],
+      temperature: 0.2,
+      max_tokens: 2500,
+    };
+    if (i === 0) body.response_format = { type: "json_object" };
+    const r = await tfetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.OR_KEY },
+      body: JSON.stringify(body),
+    }, 90000);
+    let j = {};
+    try { j = await r.json(); } catch (e) {}
+    if (!r.ok) {
+      last = "OpenRouter: " + ((j.error && j.error.message) || r.status);
+      if (r.status === 401 || r.status === 402 || r.status === 403) throw new Error(last);
+      await new Promise((ok) => setTimeout(ok, 2000));
+      continue;
+    }
+    const m = (j.choices && j.choices[0] && j.choices[0].message) || {};
+    let t = m.content || "";
+    if (Array.isArray(t)) t = t.map((x) => x.text || "").join("");
+    t = String(t);
+    const a = t.indexOf("{"), b = t.lastIndexOf("}");
+    if (a >= 0 && b > a) {
+      try { return JSON.parse(t.slice(a, b + 1)); }
+      catch (e) { last = "JSON غير صالح: " + t.slice(0, 100); }
+    } else {
+      last = "الرد بدون JSON: " + (t.slice(0, 100) || "(فاضي)");
+    }
+    await new Promise((ok) => setTimeout(ok, 1500));
+  }
+  throw new Error(last);
 }
 
 async function fb(env, path, retry = true) {
