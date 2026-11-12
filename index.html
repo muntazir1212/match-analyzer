@@ -279,6 +279,8 @@ const ANALYZE = `أنت محلل مباريات. عندك معطيات من صو
 - اعتمد على متوسطات API (أهداف وركنيات وبطاقات آخر المباريات والمواجهات المباشرة) وعلى إحصائيات الصورة.
 - إذا المباراة لايف فاحسب النتيجة والدقيقة وما تحقق من ركنيات وبطاقات حتى الآن.
 - إذا العينة صغيرة أو ناقصة فخفّض الثقة، وإذا لا توجد معطيات للسوق فاجعل pick=null.
+- المباراة قبل البداية مقبولة: استخدم الاحتمالات المحسوبة من الأودز (implied) والفورم المقروء من الصورة. إذا فيه أودز أو فورم فلا تجعل سوق الأهداف null أبداً، اختر الخط الأكثر أماناً بثقة مناسبة (منخفضة إذا المعطيات قليلة).
+- الركنيات والبطاقات: إذا لا توجد أرقام لها من الصورة أو API فاجعلها null.
 - لا نصيحة رهان ولا مبالغ.`;
 
 async function analyze(env, b64) {
@@ -296,9 +298,15 @@ async function analyze(env, b64) {
   let api;
   try { api = await apiData(env, x.home_en, x.away_en); }
   catch (e) { api = { used: false, notes: [String(e.message || e)] }; }
+  let implied = null;
+  const od = x.odds || {};
+  if (od.home > 1 && od.draw > 1 && od.away > 1) {
+    const pr = [1 / od.home, 1 / od.draw, 1 / od.away], sm = pr[0] + pr[1] + pr[2];
+    implied = { home: Math.round((pr[0] / sm) * 100), draw: Math.round((pr[1] / sm) * 100), away: Math.round((pr[2] / sm) * 100) };
+  }
   if (typeof progress === "function") STEP = "3/3 كتابة التحليل"; progress(STEP + "...");
   const r = await llm(env, [
-    { text: ANALYZE + "\n\nمعطيات الصورة:\n" + JSON.stringify(x) + "\n\nمعطيات API:\n" + JSON.stringify(api) },
+    { text: ANALYZE + "\n\nمعطيات الصورة:\n" + JSON.stringify(x) + "\n\nاحتمالات من الأودز (implied %):\n" + JSON.stringify(implied) + "\n\nمعطيات API:\n" + JSON.stringify(api) },
   ]);
   return {
     home: x.home_ar, away: x.away_ar, competition: x.competition, status: x.status,
@@ -328,7 +336,7 @@ $("go").onclick=async function(){
     card("<h2>شرح المباراة</h2><div>"+esc(j.summary)+"</div>");
     var T=[["goals","⚽ الأهداف"],["corners","🚩 الركنيات"],["cards","🟨 البطاقات الصفراء"]],cm={high:["عالية","ok"],medium:["متوسطة","wn"],low:["منخفضة","er"]};
     T.forEach(function(t){var p=j.picks&&j.picks[t[0]];
-      if(p&&p.pick){var c=cm[p.conf]||cm.low;card('<h2>'+t[1]+'</h2><div class="r"><b style="font-size:1.2rem">'+esc(p.pick)+'</b><span class="t '+c[1]+'">ثقة '+c[0]+'</span></div><div class="m" style="margin-top:6px">'+esc(p.why)+'</div>')}
+      if(p&&p.pick&&String(p.pick).toLowerCase()!=="null"){var c=cm[p.conf]||cm.low;card('<h2>'+t[1]+'</h2><div class="r"><b style="font-size:1.2rem">'+esc(p.pick)+'</b><span class="t '+c[1]+'">ثقة '+c[0]+'</span></div><div class="m" style="margin-top:6px">'+esc(p.why)+'</div>')}
       else card('<h2>'+t[1]+'</h2><div class="m">ما فيه معطيات تكفي لتوقع.</div>')});
     card('<div class="m" style="font-size:.75rem">المصدر: '+esc(j.source)+' · تحليل وليس ضماناً.</div>');
     if(j.apiNote)card('<div class="m">ملاحظة API: '+esc(j.apiNote)+'</div>');
