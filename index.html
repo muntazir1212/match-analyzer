@@ -40,8 +40,10 @@ async function freeModels() {
     const j = await r.json();
     FREE_VISION = (j.data || [])
       .filter((m) => m.pricing && Number(m.pricing.prompt) === 0 && Number(m.pricing.completion) === 0 &&
-        m.architecture && (m.architecture.input_modalities || []).includes("image"))
-      .map((m) => m.id);
+        m.architecture && (m.architecture.input_modalities || []).includes("image") &&
+        (m.architecture.output_modalities || ["text"]).join() === "text" && !/lyria|clip|veo|imagen|tts|audio|video/i.test(m.id))
+      .map((m) => m.id)
+      .sort((a, b) => (/gemma|llama|qwen|mistral|pixtral|nemotron|vl/i.test(a) ? 0 : 1) - (/gemma|llama|qwen|mistral|pixtral|nemotron|vl/i.test(b) ? 0 : 1));
   } catch (e) { FREE_VISION = []; }
   return FREE_VISION;
 }
