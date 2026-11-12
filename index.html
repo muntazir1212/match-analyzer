@@ -12,9 +12,9 @@ button{width:100%;margin-top:12px;padding:13px;border:0;border-radius:12px;backg
 button:disabled{opacity:.5}.r{display:flex;justify-content:space-between;gap:8px;align-items:center}
 .t{padding:2px 10px;border-radius:99px;font-size:.78rem;font-weight:600;border:1px solid var(--bd)}
 .ok{color:var(--ok)}.wn{color:var(--wn)}.er{color:var(--er)}.m{color:var(--mu);font-size:.85rem}h2{font-size:1rem;margin:0 0 8px}
-#gm,#gk,#fk{display:block;width:100%;box-sizing:border-box;margin-top:8px;padding:10px;border:1px solid var(--bd);border-radius:10px;background:var(--bg);color:var(--tx)}summary{cursor:pointer;font-weight:600}#sv{margin-top:10px;padding:10px}</style></head><body><main><h1>محلل المباريات</h1>
+#gh,#gm,#gk,#fk{display:block;width:100%;box-sizing:border-box;margin-top:8px;padding:10px;border:1px solid var(--bd);border-radius:10px;background:var(--bg);color:var(--tx)}summary{cursor:pointer;font-weight:600}#sv{margin-top:10px;padding:10px}</style></head><body><main><h1>محلل المباريات</h1>
 <details class="c"><summary>⚙️ المفاتيح (تنحفظ بجهازك فقط)</summary>
-<input id="gm" type="password" placeholder="مفتاح Gemini (الأول)"><input id="gk" type="password" placeholder="مفتاح OpenRouter (احتياط)"><input id="fk" type="password" placeholder="مفتاح API-Football">
+<input id="gh" type="password" placeholder="مفتاح GitHub (الأول)"><input id="gm" type="password" placeholder="مفتاح Gemini (اختياري)"><input id="gk" type="password" placeholder="مفتاح OpenRouter (احتياط)"><input id="fk" type="password" placeholder="مفتاح API-Football">
 <button id="sv">حفظ</button><div class="m" id="ks"></div></details>
 <div class="c"><label class="d"><span id="h">اضغط لرفع صورة المباراة 📸</span><input type="file" id="f" accept="image/*"></label>
 <button id="go" disabled>حلّل</button></div><div id="out"></div></main>
@@ -103,7 +103,7 @@ async function llmGem(env, parts) {
           method: "POST",
           headers: { "Content-Type": "application/json", "x-goog-api-key": env.GEMINI_KEY },
           body: JSON.stringify({ contents: [{ parts }], generationConfig: gc }),
-        }, 40000);
+        }, 90000);
         const j = await r.json();
         if (!r.ok) {
           errs.push(model + ": " + String((j.error && j.error.message) || r.status).slice(0, 60));
@@ -118,16 +118,52 @@ async function llmGem(env, parts) {
   throw new Error(errs.slice(-2).join(" | "));
 }
 
+async function llmGH(env, parts) {
+  const content = parts.map((p) =>
+    p.text != null
+      ? { type: "text", text: p.text }
+      : { type: "image_url", image_url: { url: "data:" + p.inline_data.mime_type + ";base64," + p.inline_data.data } }
+  );
+  content.push({ type: "text", text: "Reply with ONE valid JSON object only. No markdown, no explanations, no text outside the JSON." });
+  const errs = [];
+  for (const model of ["openai/gpt-4o-mini", "openai/gpt-4.1-mini"]) {
+    try {
+      const r = await tfetch("https://models.github.ai/inference/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.GH_KEY },
+        body: JSON.stringify({ model, messages: [{ role: "user", content }], temperature: 0.2, max_tokens: 2000 }),
+      }, 60000);
+      let j = {};
+      try { j = await r.json(); } catch (e) {}
+      const name = model.split("/")[1];
+      if (!r.ok) {
+        errs.push(name + ": " + String((j.error && (j.error.message || j.error)) || j.message || r.status).slice(0, 80));
+        if (r.status === 401) break;
+        continue;
+      }
+      const t = String(((j.choices || [])[0]?.message?.content) || "");
+      const a = t.indexOf("{"), b = t.lastIndexOf("}");
+      if (a >= 0 && b > a) return JSON.parse(t.slice(a, b + 1));
+      errs.push(name + ": رد بدون JSON");
+    } catch (e) { errs.push(model.split("/")[1] + ": " + e.message); }
+  }
+  throw new Error(errs.slice(-2).join(" | "));
+}
+
 async function llm(env, parts) {
-  let err = "";
+  const errs = [];
+  if (env.GH_KEY) {
+    if (typeof progress === "function") progress(STEP + " (GitHub)...");
+    try { return await llmGH(env, parts); } catch (e) { errs.push("GitHub: " + e.message); }
+  }
   if (env.GEMINI_KEY) {
     if (typeof progress === "function") progress(STEP + " (Gemini)...");
-    try { return await llmGem(env, parts); } catch (e) { err = "Gemini: " + e.message; }
+    try { return await llmGem(env, parts); } catch (e) { errs.push("Gemini: " + e.message); }
   }
   if (env.OR_KEY) {
-    try { return await llmOR(env, parts); } catch (e) { throw new Error((err ? err + " || " : "") + e.message); }
+    try { return await llmOR(env, parts); } catch (e) { errs.push(e.message); }
   }
-  throw new Error(err || "أدخل مفتاح Gemini أو OpenRouter من قسم المفاتيح");
+  throw new Error(errs.length ? errs.join(" || ") : "أدخل مفتاحاً واحداً على الأقل من قسم المفاتيح");
 }
 
 async function fb(env, path, retry = true) {
@@ -246,7 +282,7 @@ const ANALYZE = `أنت محلل مباريات. عندك معطيات من صو
 - لا نصيحة رهان ولا مبالغ.`;
 
 async function analyze(env, b64) {
-  if (!env.OR_KEY && !env.GEMINI_KEY) throw new Error("أدخل مفتاح OpenRouter من قسم المفاتيح");
+  if (!env.OR_KEY && !env.GEMINI_KEY && !env.GH_KEY) throw new Error("أدخل مفتاح OpenRouter من قسم المفاتيح");
   if (typeof progress === "function") STEP = "1/3 قراءة الصورة"; progress(STEP + "...");
   const x = await llm(env, [
     { text: EXTRACT },
@@ -273,13 +309,13 @@ async function analyze(env, b64) {
 }
 
 function progress(t){var b=document.getElementById("go");if(b)b.textContent=t}
-function getEnv(){try{return{GEMINI_KEY:localStorage.getItem("gk")||window._gk||"",OR_KEY:localStorage.getItem("ork")||window._ork||"",FOOTBALL_KEY:localStorage.getItem("fk")||window._fk||""}}catch(e){return{GEMINI_KEY:window._gk||"",OR_KEY:window._ork||"",FOOTBALL_KEY:window._fk||""}}}
+function getEnv(){try{return{GH_KEY:localStorage.getItem("ghk")||window._ghk||"",GEMINI_KEY:localStorage.getItem("gk")||window._gk||"",OR_KEY:localStorage.getItem("ork")||window._ork||"",FOOTBALL_KEY:localStorage.getItem("fk")||window._fk||""}}catch(e){return{GH_KEY:window._ghk||"",GEMINI_KEY:window._gk||"",OR_KEY:window._ork||"",FOOTBALL_KEY:window._fk||""}}}
 var $=function(i){return document.getElementById(i)},img=null;
 function esc(s){var d=document.createElement("div");d.textContent=s==null?"":String(s);return d.innerHTML}
 function card(h){var d=document.createElement("div");d.className="c";d.innerHTML=h;$("out").appendChild(d)}
 function shrink(file){return new Promise(function(res){var i=new Image();i.onload=function(){var s=Math.min(1,900/i.width),c=document.createElement("canvas");c.width=i.width*s;c.height=i.height*s;c.getContext("2d").drawImage(i,0,0,c.width,c.height);var u=c.toDataURL("image/jpeg",.8);res({url:u,b64:u.split(",")[1]})};i.src=URL.createObjectURL(file)})}
 $("f").onchange=async function(e){var f=e.target.files[0];if(!f)return;img=await shrink(f);$("h").innerHTML='<img src="'+img.url+'">';$("go").disabled=false;$("out").innerHTML="";e.target.value=""};
-$("sv").onclick=function(){var m=$("gm").value.trim(),g=$("gk").value.trim(),f=$("fk").value.trim();try{if(m)localStorage.setItem("gk",m);if(g)localStorage.setItem("ork",g);if(f)localStorage.setItem("fk",f)}catch(e){if(m)window._gk=m;if(g)window._ork=g;if(f)window._fk=f}$("gm").value="";$("gk").value="";$("fk").value="";$("ks").textContent="تم الحفظ ✓"};
+$("sv").onclick=function(){var n=$("gh").value.trim(),m=$("gm").value.trim(),g=$("gk").value.trim(),f=$("fk").value.trim();try{if(n)localStorage.setItem("ghk",n);if(m)localStorage.setItem("gk",m);if(g)localStorage.setItem("ork",g);if(f)localStorage.setItem("fk",f)}catch(e){if(n)window._ghk=n;if(m)window._gk=m;if(g)window._ork=g;if(f)window._fk=f}$("gh").value="";$("gm").value="";$("gk").value="";$("fk").value="";$("ks").textContent="تم الحفظ ✓"};
 $("go").onclick=async function(){
   $("out").innerHTML="";$("go").disabled=true;$("go").textContent="جاري التحليل...";
   try{
